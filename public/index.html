@@ -3,18 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Calc</title>
+    <title>Kopfrechnen Trainer</title>
 </head>
 <body>
-    <h1>AI Calc</h1>
+    <h1>Kopfrechnen Trainer</h1>
     <p id="aufgabe">Lade Aufgabe...</p>
     <input type="number" id="antwortInput" placeholder="Deine Antwort" autofocus>
     <button id="checkButton">Prüfen</button>
     <p id="ergebnis"></p>
 
     <script>
-        // JavaScript-Logik für die Kopfrechen-App
-
         // Elemente von der HTML-Seite holen
         const aufgabeElement = document.getElementById('aufgabe');
         const antwortInput = document.getElementById('antwortInput');
@@ -23,7 +21,7 @@
 
         let currentProblemId; // Speichert die ID der aktuellen Aufgabe
 
-        // WICHTIG: Diese URL musst du später mit der URL deiner AWS API Gateway-Instanz ersetzen!
+        // WICHTIG: Diese URL muss die "Aufrufen-URL" (Invoke URL) deines API Gateways sein!
         // Zum Beispiel: 'https://dein-api-gateway-id.execute-api.eu-central-1.amazonaws.com/prod'
         const API_BASE_URL = 'https://7a6kw8njhb.execute-api.eu-north-1.amazonaws.com/prod'; // <-- Stelle sicher, dass DIESE URL KORREKT ist
 
@@ -32,6 +30,7 @@
          */
         async function getNewProblem() {
             try {
+                console.log('Frontend: Sende Anfrage für neue Aufgabe an:', `${API_BASE_URL}/problem`);
                 // Sende eine Anfrage an dein Backend, um eine neue Aufgabe zu bekommen
                 const response = await fetch(`${API_BASE_URL}/problem`);
 
@@ -42,17 +41,20 @@
 
                 // Die Antwort vom Backend ist JSON und enthält die Aufgabe und ihre ID
                 const data = await response.json();
+                console.log('Frontend: Antwort für neue Aufgabe erhalten:', data);
 
                 // Zeige die Aufgabe auf der Webseite an
                 aufgabeElement.textContent = data.problem;
                 currentProblemId = data.problem_id; // Speichere die Problem-ID für die Überprüfung
+                console.log('Frontend: Aktuelle Problem ID:', currentProblemId);
+
 
                 // Zurücksetzen der Anzeige und des Eingabefelds
                 ergebnisElement.textContent = ''; // Alte Ergebnis-Nachricht löschen
                 antwortInput.value = ''; // Eingabefeld leeren
                 antwortInput.focus(); // Setze den Cursor ins Eingabefeld
             } catch (error) {
-                console.error('Fehler beim Laden der Aufgabe:', error);
+                console.error('Frontend: Fehler beim Laden der Aufgabe:', error);
                 aufgabeElement.textContent = 'Fehler beim Laden der Aufgabe. Bitte versuche es später noch einmal.';
             }
         }
@@ -69,6 +71,11 @@
                 return; // Beende die Funktion hier
             }
 
+            console.log('Frontend: Sende Antwort an Backend.');
+            console.log('Frontend: Problem ID gesendet:', currentProblemId);
+            console.log('Frontend: Benutzerantwort gesendet:', userAnswer);
+
+
             try {
                 // Sende die Problem-ID und die Benutzerantwort an dein Backend
                 const response = await fetch(`${API_BASE_URL}/check`, {
@@ -83,31 +90,40 @@
                     })
                 });
 
+                console.log('Frontend: Antwort-Status vom Backend:', response.status);
+
                 // Prüfe, ob die Anfrage erfolgreich war
                 if (!response.ok) {
                     // Wenn der Status 400 ist (Bad Request), könnte es eine spezifische Fehlermeldung vom Backend geben
                     if (response.status === 400) {
                         const errorData = await response.json();
+                        console.error('Frontend: Backend Fehler (400):', errorData);
                         throw new Error(errorData.error || 'Ungültige Anfrage.');
                     }
+                    console.error('Frontend: Netzwerkantwort war nicht OK, Status:', response.status, response.statusText);
                     throw new Error(`Netzwerkantwort war nicht OK: ${response.statusText}`);
                 }
 
                 // Verarbeite die Antwort vom Backend
                 const data = await response.json();
+                console.log('Frontend: Antwort vom Backend (nach JSON-Parse):', data);
+                console.log('Frontend: data.is_correct:', data.is_correct);
+                console.log('Frontend: data.correct_answer:', data.correct_answer);
 
                 // Zeige an, ob die Antwort richtig oder falsch war
                 if (data.is_correct) {
                     ergebnisElement.textContent = 'Richtig!';
                 } else {
+                    // Hier sollte jetzt immer der korrekte Wert ankommen, wenn das Problem gefunden wurde.
+                    // Die undefined-Meldung kommt, wenn data.correct_answer hier undefiniert ist.
                     ergebnisElement.textContent = `Falsch! Die richtige Antwort war ${data.correct_answer}.`;
                 }
 
                 // Nach 2 Sekunden eine neue Aufgabe laden
                 setTimeout(getNewProblem, 2000);
             } catch (error) {
-                console.error('Fehler beim Überprüfen der Antwort:', error);
-                ergebnisElement.textContent = 'Fehler beim Überprüfen der Antwort. Bitte versuche es später.'; // <-- Diese Zeile wurde korrigiert
+                console.error('Frontend: Fehler beim Überprüfen der Antwort:', error);
+                ergebnisElement.textContent = 'Fehler beim Überprüfen der Antwort. Bitte versuche es später.';
             }
         }
 
