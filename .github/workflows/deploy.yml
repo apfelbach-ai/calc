@@ -5,8 +5,8 @@ on:
     branches:
       - main # Dieser Workflow wird ausgeführt, wenn Änderungen in den 'main'-Branch gepusht werden
     paths:
-      - 'frontend/**' # Nur auslösen, wenn sich Frontend-Dateien ändern
-      - 'backend/**'  # Oder Backend-Dateien ändern
+      - 'public/**' # <-- HIER GEÄNDERT: Jetzt wird 'public' überwacht
+      - 'backend/**'
 
 env:
   AWS_REGION: eu-north-1 # Deine AWS-Region: Europa (Stockholm)
@@ -34,7 +34,7 @@ jobs:
       # --- Frontend Deployment (S3) ---
       - name: Deploy Frontend to S3 # Frontend-Dateien zu S3 kopieren
         run: |
-          aws s3 sync ./frontend/ s3://${{ env.S3_BUCKET_NAME }} --delete --exclude ".*"
+          aws s3 sync ./public/ s3://${{ env.S3_BUCKET_NAME }} --delete --exclude ".*" # <-- HIER GEÄNDERT: ./public/
           # Wichtig: Cache-Control für index.html, damit der Browser immer die neueste Version holt
           aws s3 cp s3://${{ env.S3_BUCKET_NAME }}/index.html s3://${{ env.S3_BUCKET_NAME }}/index.html --metadata-directive REPLACE --cache-control "no-cache, no-store, must-revalidate" --content-type "text/html"
 
