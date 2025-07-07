@@ -16,7 +16,7 @@ dynamodb = boto3.resource('dynamodb')
 # Diesen Wert solltest du als Umgebungsvariable in Lambda festlegen, z.B. MATH_PROBLEMS_TABLE
 # Für den Moment nehmen wir an, er ist direkt im Code.
 # WICHTIG: Ersetze 'your-math-problems-table-name' durch den tatsächlichen Namen deiner DynamoDB-Tabelle!
-table_name = os.environ.get('MATH_PROBLEMS_TABLE', 'kopfrechnen-probleme') # Standardwert, wenn Env-Var nicht gesetzt
+table_name = os.environ.get('MATH_PROBLEMS_TABLE', 'KopfrechnenAufgaben') # Standardwert, wenn Env-Var nicht gesetzt
 table = dynamodb.Table(table_name)
 
 class DecimalEncoder(json.JSONEncoder):
