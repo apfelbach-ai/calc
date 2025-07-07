@@ -1,0 +1,61 @@
+name: Deploy Kopfrechnen App to AWS
+
+on:
+  push:
+    branches:
+      - main # Dieser Workflow wird ausgeführt, wenn Änderungen in den 'main'-Branch gepusht werden
+    paths:
+      - 'frontend/**' # Nur auslösen, wenn sich Frontend-Dateien ändern
+      - 'backend/**'  # Oder Backend-Dateien ändern
+
+env:
+  AWS_REGION: eu-north-1 # Deine AWS-Region: Europa (Stockholm)
+  S3_BUCKET_NAME: apfelbach # Dein S3-Bucket-Name
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest # Der Runner, auf dem der Workflow läuft
+
+    permissions:
+      id-token: write # Erforderlich, um den OIDC-Token abzurufen
+      contents: read  # Erforderlich, um den Code aus dem Repository zu lesen
+
+    steps:
+      - name: Checkout Code # Code aus dem Repository klonen
+        uses: actions/checkout@v4
+
+      # AWS-Anmeldeinformationen über die IAM-Rolle einrichten
+      - name: Configure AWS Credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::976046824036:role/GitHubActionsDeployRole-KopfrechnenApp # Dein IAM-Rollen-ARN
+          aws-region: ${{ env.AWS_REGION }}
+
+      # --- Frontend Deployment (S3) ---
+      - name: Deploy Frontend to S3 # Frontend-Dateien zu S3 kopieren
+        run: |
+          aws s3 sync ./frontend/ s3://${{ env.S3_BUCKET_NAME }} --delete --exclude ".*"
+          # Wichtig: Cache-Control für index.html, damit der Browser immer die neueste Version holt
+          aws s3 cp s3://${{ env.S3_BUCKET_NAME }}/index.html s3://${{ env.S3_BUCKET_NAME }}/index.html --metadata-directive REPLACE --cache-control "no-cache, no-store, must-revalidate" --content-type "text/html"
+
+      # --- Backend Deployment (Lambda) ---
+      - name: Set up Python # Python-Umgebung einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13' # Passt zur Python-Version deiner Lambda-Funktion
+
+      - name: Zip Lambda Function Code # Lambda-Funktionscode zippen
+        run: |
+          cd backend # Wechsel ins Backend-Verzeichnis
+          zip -r ../kopfrechnen_backend.zip . # Zippe den Inhalt des aktuellen Verzeichnisses
+          cd .. # Zurück ins Root-Verzeichnis
+
+      - name: Deploy Lambda Function # Lambda-Funktion aktualisieren
+        run: |
+          aws lambda update-function-code \
+            --function-name kopfrechnen-backend-function \
+            --zip-file fileb://kopfrechnen_backend.zip \
+            --publish # Option 'publish' erstellt eine neue Version der Lambda-Funktion
+        
+      - name: Clean up local zip file # Temporäre Zip-Datei entfernen
+        run: rm kopfrechnen_backend.zip
