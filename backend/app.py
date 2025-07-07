@@ -1,16 +1,13 @@
 import random
 import json
 import os
-import boto3 # Dies ist das AWS SDK für Python
+import boto3
+import time # WICHTIG: Dieses Modul wird für time.time() benötigt
 
 # Initialisiere den DynamoDB-Client außerhalb der Funktion
-# Dies verbessert die Leistung bei "warmen" Lambda-Starts
 dynamodb = boto3.resource('dynamodb')
-table_name = os.environ.get('DYNAMODB_TABLE_NAME', 'KopfrechnenAufgaben') # Holt den Tabellennamen aus Umgebungsvariablen
+table_name = os.environ.get('DYNAMODB_TABLE_NAME', 'KopfrechnenAufgaben')
 table = dynamodb.Table(table_name)
-
-# KEIN temp_problem_store mehr!
-
 
 def generate_math_problem():
     num1 = random.randint(2, 10)
@@ -33,30 +30,26 @@ def generate_math_problem():
     item = {
         'problem_id': problem_id,
         'correct_answer': correct_answer,
-        # Optional: Setze eine TTL (Time To Live), damit Einträge automatisch gelöscht werden
-        # nach z.B. 5 Minuten (300 Sekunden)
-        'ttl': int(os.time() + 300)
+        # KORREKTUR: os.time() wurde zu time.time() geändert
+        'ttl': int(time.time() + 300) # time.time() gibt die aktuelle Zeit in Sekunden seit der Epoche zurück
     }
-    table.put_item(Item=item) # Speichere den Eintrag in der DynamoDB Tabelle
+    table.put_item(Item=item)
 
     return {"problem": problem_string, "problem_id": problem_id}
 
 
 def check_math_answer(problem_id, user_answer):
-    # Aufgabe aus DynamoDB abrufen
     response = table.get_item(Key={'problem_id': problem_id})
     item = response.get('Item')
 
     if item is None:
-        # Das Problem wurde nicht in DynamoDB gefunden (entweder nie gespeichert oder TTL abgelaufen)
         return {"is_correct": False, "message": "Problem nicht gefunden oder abgelaufen."}
 
     correct_answer = item.get('correct_answer')
 
     is_correct = (user_answer == correct_answer)
 
-    # Optional: Problem aus DynamoDB löschen, nachdem es geprüft wurde
-    # table.delete_item(Key={'problem_id': problem_id})
+    table.delete_item(Key={'problem_id': problem_id})
 
     return {
         "is_correct": is_correct,
@@ -64,7 +57,6 @@ def check_math_answer(problem_id, user_answer):
     }
 
 
-# --- Ab hier ist Code, der nur für Lambda ist, nicht für Colab-Tests ---
 def lambda_handler(event, context):
     path = event.get('path', '/')
     if path.startswith('/prod/'):
@@ -116,7 +108,6 @@ def lambda_handler(event, context):
                 'body': json.dumps({"error": "Ungültiges JSON-Format."})
             }
         except Exception as e:
-            # Für alle anderen Fehler
             return {
                 'statusCode': 500,
                 'headers': headers,
