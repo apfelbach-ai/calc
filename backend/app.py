@@ -1,4 +1,3 @@
-# In einer Colab-Zelle (backend_logic.py)
 import random
 import json
 
@@ -41,7 +40,13 @@ def check_math_answer(problem_id, user_answer):
     # if problem_id in temp_problem_store:
     #    del temp_problem_store[problem_id]
 
-    return {"is_correct": is_correct, "correct_answer": correct_answer}
+    # --- HIER IST DIE KORREKTUR ---
+    # Sende `correct_answer` immer mit, wenn das Problem gefunden wurde,
+    # unabhängig davon, ob die Benutzereingabe richtig war oder nicht.
+    return {
+        "is_correct": is_correct,
+        "correct_answer": correct_answer # <-- Dies wird jetzt immer gesendet
+    }
 
 
 # --- Ab hier ist Code, der nur für Lambda ist, nicht für Colab-Tests ---
@@ -55,11 +60,6 @@ def lambda_handler(event, context):
     path = event.get('path', '/')
     if path.startswith('/prod/'): # Wenn deine Stage 'prod' heißt, anpassen!
         path = path[len('/prod'):] # Entferne '/prod' vom Pfad
-    # Wenn du eine andere Stage hast (z.B. '/dev/'), passe diese Zeile entsprechend an.
-    # Oder du kannst eine allgemeinere Lösung wählen:
-    # path = '/' + '/'.join(path.split('/')[2:]) if len(path.split('/')) > 2 else path
-    # Die obige einfache Lösung ist für den Anfang besser.
-
 
     http_method = event.get('httpMethod')
 
