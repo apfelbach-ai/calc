@@ -1,11 +1,16 @@
 import random
 import json
+import os
+import boto3 # Dies ist das AWS SDK für Python
 
-# Wichtiger Hinweis für Lambda: Variablen außerhalb von Funktionen
-# bleiben zwischen Aufrufen erhalten, ABER sind NICHT dauerhaft!
-# Wenn Lambda "warm" bleibt, ist es da, sonst wird es gelöscht.
-# Für dauerhafte Speicherung bräuchte man eine Datenbank wie DynamoDB.
-temp_problem_store = {} # Speichert Aufgaben temporär
+# Initialisiere den DynamoDB-Client außerhalb der Funktion
+# Dies verbessert die Leistung bei "warmen" Lambda-Starts
+dynamodb = boto3.resource('dynamodb')
+table_name = os.environ.get('DYNAMODB_TABLE_NAME', 'KopfrechnenAufgaben') # Holt den Tabellennamen aus Umgebungsvariablen
+table = dynamodb.Table(table_name)
+
+# KEIN temp_problem_store mehr!
+
 
 def generate_math_problem():
     num1 = random.randint(2, 10)
@@ -22,60 +27,60 @@ def generate_math_problem():
     else: # '*'
         correct_answer = num1 * num2
 
-    problem_id = str(random.randint(100000, 999999)) # Eine einfache ID
-    temp_problem_store[problem_id] = correct_answer # Antwort temporär speichern
+    problem_id = str(random.randint(100000, 999999))
+
+    # Aufgabe in DynamoDB speichern
+    item = {
+        'problem_id': problem_id,
+        'correct_answer': correct_answer,
+        # Optional: Setze eine TTL (Time To Live), damit Einträge automatisch gelöscht werden
+        # nach z.B. 5 Minuten (300 Sekunden)
+        'ttl': int(os.time() + 300)
+    }
+    table.put_item(Item=item) # Speichere den Eintrag in der DynamoDB Tabelle
 
     return {"problem": problem_string, "problem_id": problem_id}
 
-def check_math_answer(problem_id, user_answer):
-    correct_answer = temp_problem_store.get(problem_id)
 
-    if correct_answer is None:
-        # Das Problem wurde nicht gefunden (z.B. weil Lambda neu gestartet wurde)
+def check_math_answer(problem_id, user_answer):
+    # Aufgabe aus DynamoDB abrufen
+    response = table.get_item(Key={'problem_id': problem_id})
+    item = response.get('Item')
+
+    if item is None:
+        # Das Problem wurde nicht in DynamoDB gefunden (entweder nie gespeichert oder TTL abgelaufen)
         return {"is_correct": False, "message": "Problem nicht gefunden oder abgelaufen."}
+
+    correct_answer = item.get('correct_answer')
 
     is_correct = (user_answer == correct_answer)
 
-    # Optional: Lösche das Problem, nachdem es geprüft wurde
-    # if problem_id in temp_problem_store:
-    #    del temp_problem_store[problem_id]
+    # Optional: Problem aus DynamoDB löschen, nachdem es geprüft wurde
+    # table.delete_item(Key={'problem_id': problem_id})
 
-    # --- HIER IST DIE KORREKTUR ---
-    # Sende `correct_answer` immer mit, wenn das Problem gefunden wurde,
-    # unabhängig davon, ob die Benutzereingabe richtig war oder nicht.
     return {
         "is_correct": is_correct,
-        "correct_answer": correct_answer # <-- Dies wird jetzt immer gesendet
+        "correct_answer": correct_answer
     }
 
 
 # --- Ab hier ist Code, der nur für Lambda ist, nicht für Colab-Tests ---
 def lambda_handler(event, context):
-    """
-    Dies ist die Hauptfunktion, die AWS Lambda aufruft.
-    Das 'event' enthält die Infos von API Gateway (z.B. den Pfad und Daten).
-    """
-    # Den Pfad aus dem Event holen und sicherstellen, dass er mit einem '/' beginnt
-    # und Stage-Namen entfernt, falls vorhanden
     path = event.get('path', '/')
-    if path.startswith('/prod/'): # Wenn deine Stage 'prod' heißt, anpassen!
-        path = path[len('/prod'):] # Entferne '/prod' vom Pfad
+    if path.startswith('/prod/'):
+        path = path[len('/prod'):]
 
     http_method = event.get('httpMethod')
 
-    # Wichtig für CORS (Cross-Origin Resource Sharing): Erlaubt deinem Frontend,
-    # das auf S3 liegt, mit diesem Backend zu sprechen.
     headers = {
-        "Access-Control-Allow-Origin": "*",  # Erlaubt Zugriffe von jeder Domain
+        "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Headers": "Content-Type",
         "Access-Control-Allow-Methods": "OPTIONS,POST,GET"
     }
 
-    # API Gateway sendet zuerst eine OPTIONS-Anfrage (Preflight), die wir beantworten müssen.
     if http_method == 'OPTIONS':
         return {'statusCode': 200, 'headers': headers}
 
-    # Wenn der Browser nach einer neuen Aufgabe fragt (GET /problem)
     if path == '/problem' and http_method == 'GET':
         problem_data = generate_math_problem()
         return {
@@ -84,10 +89,8 @@ def lambda_handler(event, context):
             'body': json.dumps(problem_data)
         }
 
-    # Wenn der Browser die Antwort sendet (POST /check)
     elif path == '/check' and http_method == 'POST':
         try:
-            # Der Body der Anfrage enthält die Daten vom Frontend (JSON)
             body = json.loads(event.get('body', '{}'))
             problem_id = body.get('problem_id')
             user_answer = body.get('answer')
@@ -120,7 +123,6 @@ def lambda_handler(event, context):
                 'body': json.dumps({"error": f"Interner Serverfehler: {str(e)}"})
             }
 
-    # Falls der Pfad oder die Methode nicht bekannt ist
     return {
         'statusCode': 404,
         'headers': headers,
