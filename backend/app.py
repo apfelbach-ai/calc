@@ -1,121 +1,203 @@
-import random
 import json
 import os
-import boto3
-import time # WICHTIG: Dieses Modul wird für time.time() benötigt
+import time
+import datetime
+import decimal
 
-# Initialisiere den DynamoDB-Client außerhalb der Funktion
+# In-Memory "Datenbank" für die gespeicherten Aufgaben
+# In einer echten Anwendung würde man hier eine Datenbank wie DynamoDB verwenden.
+# problem_store = {} # Nicht mehr nötig, da DynamoDB verwendet wird
+
+import boto3
+from boto3.dynamodb.conditions import Key
+
 dynamodb = boto3.resource('dynamodb')
-table_name = os.environ.get('DYNAMODB_TABLE_NAME', 'KopfrechnenAufgaben')
+# Stelle sicher, dass der Tabellenname korrekt ist
+# Diesen Wert solltest du als Umgebungsvariable in Lambda festlegen, z.B. MATH_PROBLEMS_TABLE
+# Für den Moment nehmen wir an, er ist direkt im Code.
+# WICHTIG: Ersetze 'your-math-problems-table-name' durch den tatsächlichen Namen deiner DynamoDB-Tabelle!
+table_name = os.environ.get('MATH_PROBLEMS_TABLE', 'kopfrechnen-probleme') # Standardwert, wenn Env-Var nicht gesetzt
 table = dynamodb.Table(table_name)
 
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, decimal.Decimal):
+            return int(obj) if obj % 1 == 0 else float(obj)
+        return super(DecimalEncoder, self).default(obj)
+
 def generate_math_problem():
-    num1 = random.randint(2, 10)
-    num2 = random.randint(2, 10)
-    operators = ['+', '-', '*']
-    operator = random.choice(operators)
+    num1 = random.randint(10, 99)
+    num2 = random.randint(10, 99)
+    operations = ['+', '-', '*']
+    operation = random.choice(operations)
+    
+    problem_text = f"{num1} {operation} {num2}"
+    correct_answer = eval(problem_text) # ACHTUNG: eval() ist riskant, hier aber ok für einfache Mathe
 
-    problem_string = f"{num1} {operator} {num2}"
+    # Eine eindeutige ID basierend auf der aktuellen Zeit
+    problem_id = str(int(time.time()))
 
-    if operator == '+':
-        correct_answer = num1 + num2
-    elif operator == '-':
-        correct_answer = num1 - num2
-    else: # '*'
-        correct_answer = num1 * num2
+    # Speichere die Aufgabe und Antwort in DynamoDB
+    # TTL (Time to Live) Attribut für 5 Minuten
+    ttl_timestamp = int(time.time()) + 5 * 60 # Ablauf in 5 Minuten
 
-    problem_id = str(random.randint(100000, 999999))
+    table.put_item(
+        Item={
+            'problem_id': problem_id,
+            'correct_answer': correct_answer,
+            'ttl': ttl_timestamp
+        }
+    )
 
-    # Aufgabe in DynamoDB speichern
-    item = {
-        'problem_id': problem_id,
-        'correct_answer': correct_answer,
-        # KORREKTUR: os.time() wurde zu time.time() geändert
-        'ttl': int(time.time() + 300) # time.time() gibt die aktuelle Zeit in Sekunden seit der Epoche zurück
+    return {
+        'problem': problem_text,
+        'problem_id': problem_id
     }
-    table.put_item(Item=item)
-
-    return {"problem": problem_string, "problem_id": problem_id}
-
 
 def check_math_answer(problem_id, user_answer):
-    response = table.get_item(Key={'problem_id': problem_id})
+    response = table.get_item(
+        Key={
+            'problem_id': problem_id
+        }
+    )
     item = response.get('Item')
 
     if item is None:
-        return {"is_correct": False, "message": "Problem nicht gefunden oder abgelaufen."}
+        # Problem nicht gefunden oder abgelaufen
+        return {
+            'is_correct': False,
+            'message': 'Problem nicht gefunden oder abgelaufen.'
+        }
+    
+    correct_answer = item['correct_answer']
+    
+    # DynamoDB gibt Zahlen als Decimal zurück, konvertiere sie für den Vergleich
+    db_correct_answer = int(correct_answer) if isinstance(correct_answer, decimal.Decimal) and correct_answer % 1 == 0 else float(correct_answer)
+    
+    if db_correct_answer == user_answer:
+        return {
+            'is_correct': True,
+            'correct_answer': db_correct_answer # Auch hier den korrekten Wert zurückgeben
+        }
+    else:
+        return {
+            'is_correct': False,
+            'correct_answer': db_correct_answer # Richtige Antwort immer zurückgeben
+        }
 
-    correct_answer = item.get('correct_answer')
-
-    is_correct = (user_answer == correct_answer)
-
-    table.delete_item(Key={'problem_id': problem_id})
-
-    return {
-        "is_correct": is_correct,
-        "correct_answer": correct_answer
-    }
-
+import random # Sicherstellen, dass random importiert ist
 
 def lambda_handler(event, context):
+    print(f"DEBUG: Empfangenes Event: {json.dumps(event)}") # Das ganze Event im Log
+
     path = event.get('path', '/')
-    if path.startswith('/prod/'):
-        path = path[len('/prod'):]
+    print(f"DEBUG: Ursprünglicher Pfad: {path}")
+
+    # API Gateway fügt oft den Stage-Namen zum Pfad hinzu (z.B. /prod/problem)
+    # Entferne ihn, damit unser Routing funktioniert
+    if path.startswith('/prod/'): # Wenn deine Stage 'prod' heißt
+        path = path[len('/prod'):] # Entfernt '/prod' vom Pfad
+    
+    print(f"DEBUG: Bereinigter Pfad: {path}")
 
     http_method = event.get('httpMethod')
 
-    headers = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "OPTIONS,POST,GET"
-    }
-
-    if http_method == 'OPTIONS':
-        return {'statusCode': 200, 'headers': headers}
-
-    if path == '/problem' and http_method == 'GET':
+    if http_method == 'GET' and path == '/problem':
         problem_data = generate_math_problem()
         return {
             'statusCode': 200,
-            'headers': headers,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*', # Wichtig für CORS
+                'Access-Control-Allow-Headers': 'Content-Type',
+                'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
+            },
             'body': json.dumps(problem_data)
         }
-
-    elif path == '/check' and http_method == 'POST':
+    elif http_method == 'POST' and path == '/check':
         try:
-            body = json.loads(event.get('body', '{}'))
-            problem_id = body.get('problem_id')
-            user_answer = body.get('answer')
-
-            if problem_id is None or user_answer is None:
+            # Versuche, den Body zu parsen. Fange Fehler ab, wenn er leer oder ungültig ist.
+            body_str = event.get('body')
+            if body_str:
+                body = json.loads(body_str)
+                print(f"DEBUG: Parsed Body: {body}")
+            else:
+                print("DEBUG: Request body is empty.")
                 return {
                     'statusCode': 400,
-                    'headers': headers,
-                    'body': json.dumps({"error": "Fehlende ID oder Antwort."})
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*',
+                        'Access-Control-Allow-Headers': 'Content-Type',
+                        'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
+                    },
+                    'body': json.dumps({"error": "Request body is empty."})
                 }
 
-            result = check_math_answer(problem_id, user_answer)
-
-            return {
-                'statusCode': 200,
-                'headers': headers,
-                'body': json.dumps(result)
-            }
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            print(f"ERROR: JSON parsing failed: {e}")
             return {
                 'statusCode': 400,
-                'headers': headers,
-                'body': json.dumps({"error": "Ungültiges JSON-Format."})
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Content-Type',
+                    'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
+                },
+                'body': json.dumps({"error": f"Invalid JSON in request body: {e}"})
             }
         except Exception as e:
+            print(f"ERROR: Unexpected error when processing body: {e}")
             return {
                 'statusCode': 500,
-                'headers': headers,
-                'body': json.dumps({"error": f"Interner Serverfehler: {str(e)}"})
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Content-Type',
+                    'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
+                },
+                'body': json.dumps({"error": f"Internal server error processing request body: {e}"})
             }
 
-    return {
-        'statusCode': 404,
-        'headers': headers,
-        'body': json.dumps({"message": "Ressource nicht gefunden."})
-    }
+        problem_id = body.get('problem_id')
+        user_answer = body.get('answer')
+
+        if problem_id is None or user_answer is None:
+            print("DEBUG: Missing problem_id or answer in request body.")
+            return {
+                'statusCode': 400,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Content-Type',
+                    'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
+                },
+                'body': json.dumps({"error": "Missing problem_id or answer."})
+            }
+        
+        result = check_math_answer(problem_id, user_answer)
+        print(f"DEBUG: check_math_answer result: {result}") # Debug-Ausgabe des Ergebnisses
+        
+        return {
+            'statusCode': 200,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Content-Type',
+                'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
+            },
+            'body': json.dumps(result, cls=DecimalEncoder)
+        }
+    else:
+        # Fallback für unbekannte Pfade oder Methoden
+        print(f"DEBUG: Unknown path or method: {path} {http_method}")
+        return {
+            'statusCode': 404,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Content-Type',
+                'Access-Allow-Methods': 'OPTIONS,POST,GET'
+            },
+            'body': json.dumps({"message": "Ressource nicht gefunden."})
+        }
